@@ -1,0 +1,20 @@
+{
+  "name": "whatsapp-order-automation",
+  "version": "1.0.0",
+  "description": "Backend Fastify para interpretar mensagens do WhatsApp via Evolution API e estruturar pedidos com IA.",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.0",
+    "dotenv": "^16.4.7",
+    "fastify": "^5.2.1",
+    "openai": "^6.0.0"
+  }
+}
