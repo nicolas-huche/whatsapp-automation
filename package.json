@@ -1,7 +1,7 @@
 {
-  "name": "whatsapp-order-automation",
+  "name": "whatsapp-message-interpreter",
   "version": "1.0.0",
-  "description": "Backend Fastify para interpretar mensagens do WhatsApp via Evolution API e estruturar pedidos com IA.",
+  "description": "Backend Fastify para interpretar mensagens do WhatsApp via Evolution API e retornar texto.",
   "type": "module",
   "main": "src/server.js",
   "scripts": {

@@ -1,4 +1,4 @@
-Backend Fastify para receber webhooks da Evolution API, transformar mensagens de WhatsApp em texto e gerar pedidos estruturados com OpenAI.
+Backend Fastify para receber webhooks da Evolution API e transformar mensagens de WhatsApp em texto interpretado.
 
 ## Setup
 
@@ -35,22 +35,22 @@ Recebe payload de `MESSAGES_UPSERT` da Evolution API. O backend:
 
 - detecta `text`, `audio` ou `image`;
 - extrai texto direto, transcreve audio com `whisper-1`, ou interpreta imagem com `gpt-4o`;
-- envia o texto para o parser de pedidos;
-- retorna o JSON estruturado do pedido.
+- retorna o texto interpretado em um JSON simples.
 
-### POST /test/parse
+Resposta:
 
-Atalho para testar somente a camada 2.
-
-```bash
-curl -X POST http://localhost:3000/test/parse \
-  -H "Content-Type: application/json" \
-  -d "{\"customer_phone\":\"5521999999999\",\"text\":\"manda 5 tomate, 3 cebola e 2 limao\"}"
+```json
+{
+  "type": "text",
+  "customer_phone": "5521999999999",
+  "text": "quero 5 kg de tomate, 3 cebola e 2 limao",
+  "received_at": "2025-01-15T14:32:00Z"
+}
 ```
 
 ## Observacoes
 
-- O catalogo fica em `src/config/catalog.js`.
 - Nenhuma mensagem e enviada de volta ao cliente.
-- Nao ha banco de dados, confirmacao de pedido, cobranca, NF-e ou frontend.
+- O sistema apenas interpreta a mensagem recebida e retorna texto.
+- Nao ha banco de dados, confirmacao, cobranca, NF-e ou frontend.
 - A Evolution API pode enviar midia como base64, URL ou exigir download por `/chat/getBase64FromMediaMessage/{instance}`; o roteador tenta os tres caminhos.

@@ -1,8 +1,7 @@
 import 'dotenv/config';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
-import { routeMediaToText, detectMessageType, extractCustomerPhone } from './services/media-router.js';
-import { parseOrderText } from './services/order-parser.js';
+import { routeMediaToText, extractCustomerPhone } from './services/media-router.js';
 import { toPublicError } from './errors.js';
 
 const app = Fastify({
@@ -12,10 +11,6 @@ const app = Fastify({
 
 await app.register(cors, {
   origin: true
-});
-
-app.addContentTypeParser('text/plain', { parseAs: 'string' }, (_request, body, done) => {
-  done(null, body);
 });
 
 app.setErrorHandler((error, request, reply) => {
@@ -31,7 +26,7 @@ app.setErrorHandler((error, request, reply) => {
 
 app.get('/health', async () => ({
   status: 'ok',
-  service: 'whatsapp-order-automation',
+  service: 'whatsapp-message-interpreter',
   timestamp: new Date().toISOString(),
   uptime_seconds: Math.round(process.uptime())
 }));
@@ -48,40 +43,21 @@ async function handleWebhookMessages(request, reply) {
     customerPhone: extractCustomerPhone(payload)
   });
 
-  const detectedType = detectMessageType(payload);
-  console.log('[media] tipo detectado', detectedType);
-
   const mediaResult = await routeMediaToText(payload);
-  console.log('[media] texto extraido', mediaResult.text);
-
-  const order = await parseOrderText({
+  const interpretedMessage = {
+    type: mediaResult.type,
+    customer_phone: mediaResult.customerPhone,
     text: mediaResult.text,
-    customerPhone: mediaResult.customerPhone
-  });
+    received_at: receivedAt
+  };
 
-  console.log('[order] pedido estruturado', JSON.stringify(order, null, 2));
+  console.log('[media] texto interpretado', interpretedMessage);
 
-  reply.send(order);
+  reply.send(interpretedMessage);
 }
 
 app.post('/webhook/messages', handleWebhookMessages);
 app.post('/webhook/messages-upsert', handleWebhookMessages);
-
-app.post('/test/parse', async (request, reply) => {
-  const text = typeof request.body === 'string' ? request.body : request.body?.text;
-  const customerPhone = typeof request.body === 'object' ? request.body?.customer_phone ?? null : null;
-
-  console.log('[test/parse] texto recebido', text);
-
-  const order = await parseOrderText({
-    text,
-    customerPhone
-  });
-
-  console.log('[test/parse] pedido estruturado', JSON.stringify(order, null, 2));
-
-  reply.send(order);
-});
 
 const port = Number(process.env.PORT || 3000);
 const host = process.env.HOST || '0.0.0.0';
