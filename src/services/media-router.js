@@ -362,7 +362,8 @@ async function downloadMedia(payload, type) {
 
   const mediaUrl = findPayloadMediaUrl(payload, type);
 
-  if (mediaUrl) {
+  // URLs do CDN do WhatsApp são criptografadas, não adianta baixar direto
+  if (mediaUrl && !mediaUrl.includes('whatsapp.net')) {
     try {
       return await fetchMediaUrl(mediaUrl, payload, type);
     } catch (error) {
@@ -370,7 +371,14 @@ async function downloadMedia(payload, type) {
     }
   }
 
-  return fetchEvolutionBase64(payload, type);
+  const result = await fetchEvolutionBase64(payload, type);
+
+  // Se o mime type veio genérico, usa o do payload original
+  if (!result.mimeType || result.mimeType === 'application/octet-stream') {
+    result.mimeType = mimeTypeFromPayload(payload, type) || result.mimeType;
+  }
+
+  return result;
 }
 
 export async function routeMediaToText(payload) {
