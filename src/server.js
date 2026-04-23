@@ -2,7 +2,12 @@ import 'dotenv/config';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { routeMediaToText, extractCustomerPhone } from './services/media-router.js';
-import { toPublicError } from './errors.js';
+import { isPurchaseOrder } from './services/order-filter.js';
+import { reasonAboutOrder } from './services/order-reasoning.js';
+import { getOrderState, saveOrderState, clearOrderState, purgeExpiredOrderStates } from './services/order-state.js';
+import { orderNeedsClarification, sendOrderClarification, buildClarificationQuestion } from './services/clarification.js';
+import { sendTextMessage } from './services/whatsapp-sender.js';
+import { AppError, toPublicError } from './errors.js';
 
 const app = Fastify({
   logger: false,
@@ -31,6 +36,37 @@ app.get('/health', async () => ({
   uptime_seconds: Math.round(process.uptime())
 }));
 
+function dataFrom(payload) {
+  return payload?.data ?? payload ?? {};
+}
+
+function extractInstance(payload) {
+  const data = dataFrom(payload);
+  return payload?.instance || data.instance || process.env.EVOLUTION_INSTANCE;
+}
+
+function formatQuantity(value) {
+  if (value === null || value === undefined) return '';
+  return Number.isInteger(value) ? String(value) : String(value).replace('.', ',');
+}
+
+function formatOrderItems(order) {
+  return order.items
+    .map((item) => {
+      const quantity = formatQuantity(item.quantity);
+      const unit = item.unit || '';
+      return `- ${[quantity, unit, item.product].filter(Boolean).join(' ')}`;
+    })
+    .join('\n');
+}
+
+function buildConfirmationMessage(order) {
+  return [
+    'Pedido confirmado:',
+    formatOrderItems(order)
+  ].join('\n');
+}
+
 async function handleWebhookMessages(request, reply) {
   const payload = request.body;
   const data = payload?.data ?? payload ?? {};
@@ -40,6 +76,10 @@ async function handleWebhookMessages(request, reply) {
 //  }
 
   const customerPhone = extractCustomerPhone(payload);
+
+  if (!customerPhone) {
+    throw new AppError('Nao foi possivel identificar o telefone do cliente no webhook.', 422);
+  }
 
   // Filtra só números permitidos (se configurado)
   const allowed = process.env.ALLOWED_PHONES;
@@ -70,7 +110,93 @@ async function handleWebhookMessages(request, reply) {
 
   console.log('[media] texto interpretado', interpretedMessage);
 
-  reply.send(interpretedMessage);
+  purgeExpiredOrderStates();
+
+  const instance = extractInstance(payload);
+  const existingOrderState = getOrderState(customerPhone);
+  const isClarificationReply = Boolean(existingOrderState);
+
+  if (!isClarificationReply) {
+    const isOrder = await isPurchaseOrder(mediaResult.text);
+
+    if (!isOrder) {
+      console.log('[order] mensagem ignorada pelo pre-filtro', {
+        customerPhone,
+        messageId: payload?.data?.key?.id
+      });
+
+      return reply.send({
+        ...interpretedMessage,
+        order_status: 'ignored',
+        reason: 'not_purchase_order'
+      });
+    }
+  }
+
+  const order = await reasonAboutOrder(mediaResult.text, isClarificationReply
+    ? {
+        order: existingOrderState.order,
+        pendingQuestions: existingOrderState.pendingQuestions,
+        clarificationAnswer: mediaResult.text
+      }
+    : null);
+
+  if (orderNeedsClarification(order)) {
+    const question = buildClarificationQuestion(order);
+
+    saveOrderState(customerPhone, {
+      order,
+      pendingQuestions: [question],
+      originalText: existingOrderState?.originalText || mediaResult.text
+    });
+
+    const clarification = await sendOrderClarification({
+      customerPhone,
+      order,
+      instance
+    });
+
+    console.log('[order] clarificacao enviada', {
+      customerPhone,
+      items: order.items.length,
+      question: clarification.question
+    });
+
+    return reply.send({
+      ...interpretedMessage,
+      order_status: 'needs_clarification',
+      clarification: {
+        sent: true,
+        question: clarification.question
+      },
+      order
+    });
+  }
+
+  clearOrderState(customerPhone);
+
+  const confirmationText = buildConfirmationMessage(order);
+  await sendTextMessage({
+    to: customerPhone,
+    text: confirmationText,
+    instance
+  });
+
+  console.log('[order] pedido confirmado', {
+    customerPhone,
+    items: order.items.length,
+    fromClarification: isClarificationReply
+  });
+
+  return reply.send({
+    ...interpretedMessage,
+    order_status: isClarificationReply ? 'clarified_and_confirmed' : 'confirmed',
+    confirmation: {
+      sent: true,
+      text: confirmationText
+    },
+    order
+  });
 }
 
 app.post('/webhook/messages', handleWebhookMessages);
