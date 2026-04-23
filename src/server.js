@@ -2,6 +2,7 @@ import 'dotenv/config';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { routeMediaToText, extractCustomerPhone, extractCustomerName } from './services/media-router.js';
+import { resolveContact } from './services/contact-resolver.js';
 import { isPurchaseOrder } from './services/order-filter.js';
 import { reasonAboutOrder } from './services/order-reasoning.js';
 import { getOrderState, saveOrderState, clearOrderState, purgeExpiredOrderStates, ORDER_STATE_STATUS } from './services/order-state.js';
@@ -63,6 +64,7 @@ async function askForOrderConfirmation({
   interpretedMessage,
   customerPhone,
   customerName,
+  resolvedPhone,
   instance,
   order,
   existingOrderState,
@@ -85,6 +87,7 @@ async function askForOrderConfirmation({
   console.log('[order] aguardando confirmacao', {
     customerPhone,
     customerName,
+    resolvedPhone,
     items: order.items.length,
     message: confirmationRequest.message
   });
@@ -105,6 +108,7 @@ async function handleReasonedOrder({
   interpretedMessage,
   customerPhone,
   customerName,
+  resolvedPhone,
   instance,
   order,
   existingOrderState,
@@ -129,6 +133,7 @@ async function handleReasonedOrder({
     console.log('[order] clarificacao enviada', {
       customerPhone,
       customerName,
+      resolvedPhone,
       items: order.items.length,
       question: clarification.question
     });
@@ -149,6 +154,7 @@ async function handleReasonedOrder({
     interpretedMessage,
     customerPhone,
     customerName,
+    resolvedPhone,
     instance,
     order,
     existingOrderState,
@@ -170,12 +176,26 @@ async function handleWebhookMessages(request, reply) {
     throw new AppError('Nao foi possivel identificar o telefone do cliente no webhook.', 422);
   }
 
+  const instance = extractInstance(payload);
+  const resolved = await resolveContact(customerPhone, instance);
+  const resolvedPhone = resolved.phone;
+  const phoneForFilter = resolvedPhone || customerPhone;
+
+  console.log('[contact] identificador resolvido', {
+    raw: customerPhone,
+    resolved: resolvedPhone,
+    isLid: resolved.isLid,
+    customerName
+  });
+
+  const shouldApplyAllowedPhones = !resolved.isLid || Boolean(resolvedPhone);
+
   // Filtra só números permitidos (se configurado)
   const allowed = process.env.ALLOWED_PHONES?.trim();
-  if (allowed) {
+  if (allowed && shouldApplyAllowedPhones) {
     const allowedList = allowed.split(',').map(n => n.trim()).filter(Boolean);
-    if (allowedList.length && !allowedList.includes(customerPhone)) {
-      return reply.send({ ignored: true, reason: 'not_allowed', phone: customerPhone });
+    if (allowedList.length && !allowedList.includes(phoneForFilter)) {
+      return reply.send({ ignored: true, reason: 'not_allowed', phone: phoneForFilter });
     }
   }
 
@@ -187,7 +207,8 @@ async function handleWebhookMessages(request, reply) {
     instance: payload?.instance,
     messageId: payload?.data?.key?.id,
     customerPhone,
-    customerName
+    customerName,
+    resolvedPhone
   });
 
   const mediaResult = await routeMediaToText(payload);
@@ -200,12 +221,12 @@ async function handleWebhookMessages(request, reply) {
 
   console.log('[media] texto interpretado', {
     ...interpretedMessage,
-    customerName
+    customerName,
+    resolvedPhone
   });
 
   purgeExpiredOrderStates();
 
-  const instance = extractInstance(payload);
   const existingOrderState = getOrderState(customerPhone);
   const stateStatus = existingOrderState?.status || (
     existingOrderState ? ORDER_STATE_STATUS.AWAITING_CLARIFICATION : null
@@ -225,6 +246,7 @@ async function handleWebhookMessages(request, reply) {
       console.log('[order] pedido cancelado', {
         customerPhone,
         customerName,
+        resolvedPhone,
         items: existingOrderState.order?.items?.length || 0
       });
 
@@ -252,6 +274,7 @@ async function handleWebhookMessages(request, reply) {
       console.log('[order] pedido confirmado', {
         customerPhone,
         customerName,
+        resolvedPhone,
         items: existingOrderState.order.items.length,
         confirmedByCustomer: true
       });
@@ -259,6 +282,7 @@ async function handleWebhookMessages(request, reply) {
       console.log('[order] pedido confirmado pelo cliente', {
         customerPhone,
         customerName,
+        resolvedPhone,
         items: existingOrderState.order.items.length
       });
 
@@ -276,6 +300,7 @@ async function handleWebhookMessages(request, reply) {
     console.log('[order] correcao recebida', {
       customerPhone,
       customerName,
+      resolvedPhone,
       text: mediaResult.text
     });
 
@@ -290,6 +315,7 @@ async function handleWebhookMessages(request, reply) {
       interpretedMessage,
       customerPhone,
       customerName,
+      resolvedPhone,
       instance,
       order: correctedOrder,
       existingOrderState,
@@ -309,6 +335,7 @@ async function handleWebhookMessages(request, reply) {
       interpretedMessage,
       customerPhone,
       customerName,
+      resolvedPhone,
       instance,
       order: clarifiedOrder,
       existingOrderState
@@ -321,6 +348,7 @@ async function handleWebhookMessages(request, reply) {
     console.log('[order] mensagem ignorada pelo pre-filtro', {
       customerPhone,
       customerName,
+      resolvedPhone,
       messageId: payload?.data?.key?.id
     });
 
@@ -338,6 +366,7 @@ async function handleWebhookMessages(request, reply) {
     interpretedMessage,
     customerPhone,
     customerName,
+    resolvedPhone,
     instance,
     order
   });
