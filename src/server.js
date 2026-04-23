@@ -188,13 +188,19 @@ async function handleWebhookMessages(request, reply) {
     customerName
   });
 
-  const shouldApplyAllowedPhones = !resolved.isLid || Boolean(resolvedPhone);
-
   // Filtra só números permitidos (se configurado)
   const allowed = process.env.ALLOWED_PHONES?.trim();
-  if (allowed && shouldApplyAllowedPhones) {
+  if (allowed) {
     const allowedList = allowed.split(',').map(n => n.trim()).filter(Boolean);
     if (allowedList.length && !allowedList.includes(phoneForFilter)) {
+      console.log('[filter] mensagem bloqueada', {
+        phoneForFilter,
+        customerPhone,
+        resolvedPhone,
+        customerName,
+        hint: `Para permitir, adicione ${phoneForFilter} no ALLOWED_PHONES`
+      });
+
       return reply.send({ ignored: true, reason: 'not_allowed', phone: phoneForFilter });
     }
   }

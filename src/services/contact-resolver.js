@@ -29,13 +29,16 @@ function lidFrom(identifier) {
 function isLidIdentifier(identifier) {
   const raw = String(identifier ?? '').trim().toLowerCase();
   const digits = lidFrom(raw);
+  const result = raw.includes('@lid') || digits.length > 15;
+
   console.log('[contact-resolver] isLid check:', {
     raw: identifier,
     digits,
-    length: digits.length
+    length: digits.length,
+    isLid: result
   });
 
-  return raw.includes('@lid') || digits.length > 15;
+  return result;
 }
 
 async function parseResponse(response) {
