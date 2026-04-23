@@ -77,7 +77,7 @@ export function extractCustomerPhone(payload) {
     const normalizedSuffix = suffix.toLowerCase();
 
     if (normalizedSuffix === 'lid' && beforeAt.trim()) {
-      return beforeAt.trim();
+      return `${beforeAt.trim()}@lid`;
     }
 
     const digits = beforeAt.replace(/\D/g, '');

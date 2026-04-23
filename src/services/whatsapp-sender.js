@@ -26,7 +26,7 @@ function normalizeRecipient(to) {
     return raw;
   }
 
-  if (digits.length > 15) {
+  if (digits.length >= 15) {
     return `${digits}@lid`;
   }
 
