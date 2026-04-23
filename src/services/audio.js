@@ -1,20 +1,6 @@
 import { toFile } from 'openai';
-import OpenAI from 'openai';
 import { AppError } from '../errors.js';
-
-let openaiClient;
-
-function getOpenAIClient() {
-  if (!process.env.OPENAI_API_KEY) {
-    throw new AppError('OPENAI_API_KEY nao configurada para transcrever audio.', 500);
-  }
-
-  if (!openaiClient) {
-    openaiClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  }
-
-  return openaiClient;
-}
+import { getOpenAIClient } from './openai-client.js';
 
 function mimeForAudio(mimeType) {
   const normalized = (mimeType ?? '').toLowerCase();

@@ -1,19 +1,5 @@
-import OpenAI from 'openai';
 import { AppError } from '../errors.js';
-
-let openaiClient;
-
-function getOpenAIClient() {
-  if (!process.env.OPENAI_API_KEY) {
-    throw new AppError('OPENAI_API_KEY nao configurada para interpretar imagem.', 500);
-  }
-
-  if (!openaiClient) {
-    openaiClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  }
-
-  return openaiClient;
-}
+import { getOpenAIClient } from './openai-client.js';
 
 export async function interpretImage(media, caption = '') {
   const model = process.env.OPENAI_VISION_MODEL || 'gpt-4o';

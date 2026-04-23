@@ -59,6 +59,9 @@ async function findOrCreateAsaasCustomer({ name, document, phone, email }) {
   if (cleanDocument) {
     const existing = await asaasRequest(`/customers?cpfCnpj=${cleanDocument}`);
     if (existing?.data?.length) return existing.data[0];
+  } else if (cleanPhone) {
+    const byPhone = await asaasRequest(`/customers?mobilePhone=${cleanPhone}`);
+    if (byPhone?.data?.length) return byPhone.data[0];
   }
 
   return asaasRequest('/customers', {

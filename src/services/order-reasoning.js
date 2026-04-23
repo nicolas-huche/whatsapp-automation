@@ -1,19 +1,5 @@
-import OpenAI from 'openai';
 import { AppError } from '../errors.js';
-
-let openaiClient;
-
-function getOpenAIClient() {
-  if (!process.env.OPENAI_API_KEY) {
-    throw new AppError('OPENAI_API_KEY nao configurada para estruturar pedidos.', 500);
-  }
-
-  if (!openaiClient) {
-    openaiClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  }
-
-  return openaiClient;
-}
+import { getOpenAIClient } from './openai-client.js';
 
 function clampConfidence(value, fallback = 0) {
   const number = Number(value);

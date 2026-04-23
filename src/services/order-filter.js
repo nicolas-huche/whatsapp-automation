@@ -1,18 +1,23 @@
-import OpenAI from 'openai';
 import { AppError } from '../errors.js';
+import { getOpenAIClient } from './openai-client.js';
 
-let openaiClient;
+function normalizeAnswer(raw) {
+  return String(raw ?? '')
+    .trim()
+    .toUpperCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^A-Z]/g, '');
+}
 
-function getOpenAIClient() {
-  if (!process.env.OPENAI_API_KEY) {
-    throw new AppError('OPENAI_API_KEY nao configurada para filtrar pedidos.', 500);
-  }
+function classify(rawAnswer) {
+  const normalized = normalizeAnswer(rawAnswer);
 
-  if (!openaiClient) {
-    openaiClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  }
+  if (!normalized) return 'unknown';
+  if (normalized.startsWith('SIM') || normalized.startsWith('YES')) return 'yes';
+  if (normalized.startsWith('NAO') || normalized.startsWith('NO')) return 'no';
 
-  return openaiClient;
+  return 'unknown';
 }
 
 export async function isPurchaseOrder(text) {
@@ -24,7 +29,7 @@ export async function isPurchaseOrder(text) {
     const completion = await getOpenAIClient().chat.completions.create({
       model,
       temperature: 0,
-      max_tokens: 3,
+      max_tokens: 5,
       messages: [
         {
           role: 'system',
@@ -37,8 +42,18 @@ export async function isPurchaseOrder(text) {
       ]
     });
 
-    const answer = completion.choices[0]?.message?.content?.trim().toUpperCase() || '';
-    return answer.startsWith('SIM');
+    const rawAnswer = completion.choices[0]?.message?.content || '';
+    const decision = classify(rawAnswer);
+
+    if (decision === 'unknown') {
+      console.warn('[order-filter] resposta inesperada do modelo, assumindo pedido', {
+        rawAnswer,
+        text: text.slice(0, 120)
+      });
+      return true;
+    }
+
+    return decision === 'yes';
   } catch (error) {
     if (error instanceof AppError) {
       throw error;

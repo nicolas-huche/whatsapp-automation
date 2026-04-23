@@ -1,75 +1,125 @@
-const orderStates = new Map();
+import { getRedis, keyPrefix } from './redis-client.js';
+
+const memoryStates = new Map();
 
 export const ORDER_STATE_STATUS = {
   AWAITING_CLARIFICATION: 'awaiting_clarification',
   AWAITING_CONFIRMATION: 'awaiting_confirmation'
 };
 
-function ttlMs() {
+function ttlSeconds() {
   const minutes = Number(process.env.ORDER_STATE_TTL_MINUTES || 30);
-  return Math.max(1, minutes) * 60 * 1000;
+  return Math.max(1, minutes) * 60;
 }
 
-function keyFor(customerPhone) {
+function ttlMs() {
+  return ttlSeconds() * 1000;
+}
+
+function normalizeKey(customerPhone) {
   const key = String(customerPhone ?? '').replace(/\D/g, '');
   return key || null;
 }
 
-function isExpired(context) {
-  return Date.now() > context.expiresAt;
+function redisKey(key) {
+  return `${keyPrefix()}:order-state:${key}`;
 }
 
-export function getOrderState(customerPhone) {
-  const key = keyFor(customerPhone);
+function isExpired(record) {
+  return Date.now() > record.expiresAt;
+}
+
+async function readFromRedis(client, key) {
+  const raw = await client.get(redisKey(key));
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    console.error('[order-state] JSON invalido no Redis, limpando', { key, error: error.message });
+    await client.del(redisKey(key));
+    return null;
+  }
+}
+
+async function writeToRedis(client, key, record) {
+  await client.set(redisKey(key), JSON.stringify(record), 'EX', ttlSeconds());
+}
+
+export async function getOrderState(customerPhone) {
+  const key = normalizeKey(customerPhone);
   if (!key) return null;
 
-  const context = orderStates.get(key);
-  if (!context) return null;
+  const client = getRedis();
 
-  if (isExpired(context)) {
-    orderStates.delete(key);
+  if (client) {
+    return readFromRedis(client, key);
+  }
+
+  const record = memoryStates.get(key);
+  if (!record) return null;
+
+  if (isExpired(record)) {
+    memoryStates.delete(key);
     return null;
   }
 
-  return context;
+  return record;
 }
 
-export function hasPendingOrderState(customerPhone) {
-  return Boolean(getOrderState(customerPhone));
+export async function hasPendingOrderState(customerPhone) {
+  return Boolean(await getOrderState(customerPhone));
 }
 
-export function saveOrderState(customerPhone, context) {
-  const key = keyFor(customerPhone);
+export async function saveOrderState(customerPhone, context) {
+  const key = normalizeKey(customerPhone);
   if (!key) return null;
 
   const now = new Date();
-  const existing = orderStates.get(key);
-  const next = {
+  const existing = await getOrderState(customerPhone);
+
+  const record = {
     customerPhone: key,
     status: context.status || existing?.status || ORDER_STATE_STATUS.AWAITING_CLARIFICATION,
     order: context.order,
     pendingQuestions: context.pendingQuestions || [],
     originalText: context.originalText || existing?.originalText || null,
+    customerName: context.customerName ?? existing?.customerName ?? null,
     createdAt: existing?.createdAt || now.toISOString(),
     updatedAt: now.toISOString(),
     expiresAt: Date.now() + ttlMs()
   };
 
-  orderStates.set(key, next);
-  return next;
+  const client = getRedis();
+
+  if (client) {
+    await writeToRedis(client, key, record);
+  } else {
+    memoryStates.set(key, record);
+  }
+
+  return record;
 }
 
-export function clearOrderState(customerPhone) {
-  const key = keyFor(customerPhone);
+export async function clearOrderState(customerPhone) {
+  const key = normalizeKey(customerPhone);
   if (!key) return false;
 
-  return orderStates.delete(key);
+  const client = getRedis();
+
+  if (client) {
+    const removed = await client.del(redisKey(key));
+    return removed > 0;
+  }
+
+  return memoryStates.delete(key);
 }
 
-export function purgeExpiredOrderStates() {
-  for (const [key, context] of orderStates.entries()) {
-    if (isExpired(context)) {
-      orderStates.delete(key);
+export async function purgeExpiredOrderStates() {
+  if (getRedis()) return;
+
+  for (const [key, record] of memoryStates.entries()) {
+    if (isExpired(record)) {
+      memoryStates.delete(key);
     }
   }
 }
