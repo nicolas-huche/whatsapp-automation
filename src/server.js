@@ -1,11 +1,19 @@
 import 'dotenv/config';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
-import { routeMediaToText, extractCustomerPhone } from './services/media-router.js';
+import { routeMediaToText, extractCustomerPhone, extractCustomerName } from './services/media-router.js';
 import { isPurchaseOrder } from './services/order-filter.js';
 import { reasonAboutOrder } from './services/order-reasoning.js';
-import { getOrderState, saveOrderState, clearOrderState, purgeExpiredOrderStates } from './services/order-state.js';
-import { orderNeedsClarification, sendOrderClarification, buildClarificationQuestion } from './services/clarification.js';
+import { getOrderState, saveOrderState, clearOrderState, purgeExpiredOrderStates, ORDER_STATE_STATUS } from './services/order-state.js';
+import {
+  orderNeedsClarification,
+  sendOrderClarification,
+  buildClarificationQuestion,
+  isConfirmationReply,
+  isCancellationReply,
+  sendOrderConfirmationRequest,
+  buildOrderConfirmedMessage
+} from './services/clarification.js';
 import { sendTextMessage } from './services/whatsapp-sender.js';
 import { AppError, toPublicError } from './errors.js';
 
@@ -50,109 +58,66 @@ function isFromMe(payload) {
   return Boolean(data.key?.fromMe || payload?.key?.fromMe);
 }
 
-function formatQuantity(value) {
-  if (value === null || value === undefined) return '';
-  return Number.isInteger(value) ? String(value) : String(value).replace('.', ',');
-}
-
-function formatOrderItems(order) {
-  return order.items
-    .map((item) => {
-      const quantity = formatQuantity(item.quantity);
-      const unit = item.unit || '';
-      const productName = item.product_name || item.product;
-      return `- ${[quantity, unit, productName].filter(Boolean).join(' ')}`;
-    })
-    .join('\n');
-}
-
-function buildConfirmationMessage(order) {
-  return [
-    'Pedido confirmado:',
-    formatOrderItems(order)
-  ].join('\n');
-}
-
-async function handleWebhookMessages(request, reply) {
-  const payload = request.body;
-
-  if (isFromMe(payload)) {
-    return reply.send({ ignored: true, reason: 'fromMe' });
-  }
-
-  const customerPhone = extractCustomerPhone(payload);
-
-  if (!customerPhone) {
-    throw new AppError('Nao foi possivel identificar o telefone do cliente no webhook.', 422);
-  }
-
-  // Filtra só números permitidos (se configurado)
-  const allowed = process.env.ALLOWED_PHONES;
-  if (allowed) {
-    const allowedList = allowed.split(',').map(n => n.trim());
-    if (!allowedList.includes(customerPhone)) {
-      return reply.send({ ignored: true, reason: 'not_allowed', phone: customerPhone });
-    }
-  }
-
-  const receivedAt = new Date().toISOString();
-
-  console.log('[webhook] mensagem recebida', {
-    receivedAt,
-    event: payload?.event,
-    instance: payload?.instance,
-    messageId: payload?.data?.key?.id,
-    customerPhone
+async function askForOrderConfirmation({
+  reply,
+  interpretedMessage,
+  customerPhone,
+  customerName,
+  instance,
+  order,
+  existingOrderState,
+  heading = 'Seu pedido:'
+}) {
+  saveOrderState(customerPhone, {
+    status: ORDER_STATE_STATUS.AWAITING_CONFIRMATION,
+    order,
+    pendingQuestions: [],
+    originalText: existingOrderState?.originalText || interpretedMessage.text
   });
 
-  const mediaResult = await routeMediaToText(payload);
-  const interpretedMessage = {
-    type: mediaResult.type,
-    customer_phone: mediaResult.customerPhone,
-    text: mediaResult.text,
-    received_at: receivedAt
-  };
+  const confirmationRequest = await sendOrderConfirmationRequest({
+    customerPhone,
+    order,
+    instance,
+    heading
+  });
 
-  console.log('[media] texto interpretado', interpretedMessage);
+  console.log('[order] aguardando confirmacao', {
+    customerPhone,
+    customerName,
+    items: order.items.length,
+    message: confirmationRequest.message
+  });
 
-  purgeExpiredOrderStates();
+  return reply.send({
+    ...interpretedMessage,
+    order_status: ORDER_STATE_STATUS.AWAITING_CONFIRMATION,
+    confirmation_request: {
+      sent: true,
+      text: confirmationRequest.message
+    },
+    order
+  });
+}
 
-  const instance = extractInstance(payload);
-  const existingOrderState = getOrderState(customerPhone);
-  const isClarificationReply = Boolean(existingOrderState);
-
-  if (!isClarificationReply) {
-    const isOrder = await isPurchaseOrder(mediaResult.text);
-
-    if (!isOrder) {
-      console.log('[order] mensagem ignorada pelo pre-filtro', {
-        customerPhone,
-        messageId: payload?.data?.key?.id
-      });
-
-      return reply.send({
-        ...interpretedMessage,
-        order_status: 'ignored',
-        reason: 'not_purchase_order'
-      });
-    }
-  }
-
-  const order = await reasonAboutOrder(mediaResult.text, isClarificationReply
-    ? {
-        order: existingOrderState.order,
-        pendingQuestions: existingOrderState.pendingQuestions,
-        clarificationAnswer: mediaResult.text
-      }
-    : null);
-
+async function handleReasonedOrder({
+  reply,
+  interpretedMessage,
+  customerPhone,
+  customerName,
+  instance,
+  order,
+  existingOrderState,
+  confirmationHeading = 'Seu pedido:'
+}) {
   if (orderNeedsClarification(order)) {
     const question = buildClarificationQuestion(order);
 
     saveOrderState(customerPhone, {
+      status: ORDER_STATE_STATUS.AWAITING_CLARIFICATION,
       order,
       pendingQuestions: [question],
-      originalText: existingOrderState?.originalText || mediaResult.text
+      originalText: existingOrderState?.originalText || interpretedMessage.text
     });
 
     const clarification = await sendOrderClarification({
@@ -163,6 +128,7 @@ async function handleWebhookMessages(request, reply) {
 
     console.log('[order] clarificacao enviada', {
       customerPhone,
+      customerName,
       items: order.items.length,
       question: clarification.question
     });
@@ -178,28 +144,201 @@ async function handleWebhookMessages(request, reply) {
     });
   }
 
-  clearOrderState(customerPhone);
-
-  const confirmationText = buildConfirmationMessage(order);
-  await sendTextMessage({
-    to: customerPhone,
-    text: confirmationText,
-    instance
-  });
-
-  console.log('[order] pedido confirmado', {
+  return askForOrderConfirmation({
+    reply,
+    interpretedMessage,
     customerPhone,
-    items: order.items.length,
-    fromClarification: isClarificationReply
+    customerName,
+    instance,
+    order,
+    existingOrderState,
+    heading: confirmationHeading
+  });
+}
+
+async function handleWebhookMessages(request, reply) {
+  const payload = request.body;
+
+  if (isFromMe(payload)) {
+    return reply.send({ ignored: true, reason: 'fromMe' });
+  }
+
+  const customerPhone = extractCustomerPhone(payload);
+  const customerName = extractCustomerName(payload);
+
+  if (!customerPhone) {
+    throw new AppError('Nao foi possivel identificar o telefone do cliente no webhook.', 422);
+  }
+
+  // Filtra só números permitidos (se configurado)
+  const allowed = process.env.ALLOWED_PHONES?.trim();
+  if (allowed) {
+    const allowedList = allowed.split(',').map(n => n.trim()).filter(Boolean);
+    if (allowedList.length && !allowedList.includes(customerPhone)) {
+      return reply.send({ ignored: true, reason: 'not_allowed', phone: customerPhone });
+    }
+  }
+
+  const receivedAt = new Date().toISOString();
+
+  console.log('[webhook] mensagem recebida', {
+    receivedAt,
+    event: payload?.event,
+    instance: payload?.instance,
+    messageId: payload?.data?.key?.id,
+    customerPhone,
+    customerName
   });
 
-  return reply.send({
+  const mediaResult = await routeMediaToText(payload);
+  const interpretedMessage = {
+    type: mediaResult.type,
+    customer_phone: mediaResult.customerPhone,
+    text: mediaResult.text,
+    received_at: receivedAt
+  };
+
+  console.log('[media] texto interpretado', {
     ...interpretedMessage,
-    order_status: isClarificationReply ? 'clarified_and_confirmed' : 'confirmed',
-    confirmation: {
-      sent: true,
-      text: confirmationText
-    },
+    customerName
+  });
+
+  purgeExpiredOrderStates();
+
+  const instance = extractInstance(payload);
+  const existingOrderState = getOrderState(customerPhone);
+  const stateStatus = existingOrderState?.status || (
+    existingOrderState ? ORDER_STATE_STATUS.AWAITING_CLARIFICATION : null
+  );
+
+  if (stateStatus === ORDER_STATE_STATUS.AWAITING_CONFIRMATION) {
+    if (isCancellationReply(mediaResult.text)) {
+      clearOrderState(customerPhone);
+
+      const cancellationText = 'Pedido cancelado.';
+      await sendTextMessage({
+        to: customerPhone,
+        text: cancellationText,
+        instance
+      });
+
+      console.log('[order] pedido cancelado', {
+        customerPhone,
+        customerName,
+        items: existingOrderState.order?.items?.length || 0
+      });
+
+      return reply.send({
+        ...interpretedMessage,
+        order_status: 'cancelled',
+        cancellation: {
+          sent: true,
+          text: cancellationText
+        },
+        order: existingOrderState.order
+      });
+    }
+
+    if (isConfirmationReply(mediaResult.text)) {
+      clearOrderState(customerPhone);
+
+      const confirmationText = buildOrderConfirmedMessage(existingOrderState.order);
+      await sendTextMessage({
+        to: customerPhone,
+        text: confirmationText,
+        instance
+      });
+
+      console.log('[order] pedido confirmado', {
+        customerPhone,
+        customerName,
+        items: existingOrderState.order.items.length,
+        confirmedByCustomer: true
+      });
+
+      console.log('[order] pedido confirmado pelo cliente', {
+        customerPhone,
+        customerName,
+        items: existingOrderState.order.items.length
+      });
+
+      return reply.send({
+        ...interpretedMessage,
+        order_status: 'confirmed',
+        confirmation: {
+          sent: true,
+          text: confirmationText
+        },
+        order: existingOrderState.order
+      });
+    }
+
+    console.log('[order] correcao recebida', {
+      customerPhone,
+      customerName,
+      text: mediaResult.text
+    });
+
+    const correctedOrder = await reasonAboutOrder(mediaResult.text, {
+      order: existingOrderState.order,
+      pendingQuestions: existingOrderState.pendingQuestions,
+      correctionText: mediaResult.text
+    });
+
+    return handleReasonedOrder({
+      reply,
+      interpretedMessage,
+      customerPhone,
+      customerName,
+      instance,
+      order: correctedOrder,
+      existingOrderState,
+      confirmationHeading: 'Pedido atualizado:'
+    });
+  }
+
+  if (stateStatus === ORDER_STATE_STATUS.AWAITING_CLARIFICATION) {
+    const clarifiedOrder = await reasonAboutOrder(mediaResult.text, {
+      order: existingOrderState.order,
+      pendingQuestions: existingOrderState.pendingQuestions,
+      clarificationAnswer: mediaResult.text
+    });
+
+    return handleReasonedOrder({
+      reply,
+      interpretedMessage,
+      customerPhone,
+      customerName,
+      instance,
+      order: clarifiedOrder,
+      existingOrderState
+    });
+  }
+
+  const isOrder = await isPurchaseOrder(mediaResult.text);
+
+  if (!isOrder) {
+    console.log('[order] mensagem ignorada pelo pre-filtro', {
+      customerPhone,
+      customerName,
+      messageId: payload?.data?.key?.id
+    });
+
+    return reply.send({
+      ...interpretedMessage,
+      order_status: 'ignored',
+      reason: 'not_purchase_order'
+    });
+  }
+
+  const order = await reasonAboutOrder(mediaResult.text);
+
+  return handleReasonedOrder({
+    reply,
+    interpretedMessage,
+    customerPhone,
+    customerName,
+    instance,
     order
   });
 }

@@ -28,7 +28,7 @@ export async function isPurchaseOrder(text) {
       messages: [
         {
           role: 'system',
-          content: 'Responda somente SIM ou NAO. SIM se o texto for pedido de compra/cotacao com itens/produtos. NAO para saudacao, duvida, agradecimento ou conversa sem pedido.'
+          content: 'Responda somente SIM ou NAO. O texto e um pedido de compra? SIM se mencionar produtos, itens ou quantidades, mesmo que comece com saudacao como oi, bom dia, boa tarde. NAO apenas se for conversa sem nenhum produto ou item mencionado.'
         },
         {
           role: 'user',

@@ -1,5 +1,10 @@
 const orderStates = new Map();
 
+export const ORDER_STATE_STATUS = {
+  AWAITING_CLARIFICATION: 'awaiting_clarification',
+  AWAITING_CONFIRMATION: 'awaiting_confirmation'
+};
+
 function ttlMs() {
   const minutes = Number(process.env.ORDER_STATE_TTL_MINUTES || 30);
   return Math.max(1, minutes) * 60 * 1000;
@@ -41,6 +46,7 @@ export function saveOrderState(customerPhone, context) {
   const existing = orderStates.get(key);
   const next = {
     customerPhone: key,
+    status: context.status || existing?.status || ORDER_STATE_STATUS.AWAITING_CLARIFICATION,
     order: context.order,
     pendingQuestions: context.pendingQuestions || [],
     originalText: context.originalText || existing?.originalText || null,

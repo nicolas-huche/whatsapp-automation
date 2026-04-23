@@ -178,6 +178,10 @@ function buildUserPrompt(text, context) {
     parts.push(`Resposta de clarificacao do cliente: ${context.clarificationAnswer}`);
   }
 
+  if (context?.correctionText) {
+    parts.push(`Correcao parcial enviada pelo cliente: ${context.correctionText}`);
+  }
+
   return parts.join('\n');
 }
 
@@ -206,7 +210,9 @@ export async function reasonAboutOrder(text, context = null) {
             'Sempre preencha unit_was_inferred e inference_reason: use true quando a unidade nao foi dita literalmente e voce precisou inferir; use false e inference_reason null quando a unidade foi dita.',
             'Se o cliente disser "2 limao", "3 cebola" ou item contavel sem unidade explicita, use unit "un", unit_was_inferred true, explique em inference_reason e reduza confidence se o produto tambem costuma ser vendido por peso ou caixa.',
             'Se quantidade ou unidade estiver ausente, ambigua, contraditoria ou depender de confirmacao comercial, use confidence baixo, descreva em ambiguities e gere uma pergunta curta em clarification_questions.',
-            'Se houver pedido parcial anterior e uma resposta de clarificacao, mescle a resposta no pedido anterior e preserve os itens ja confirmados.'
+            'Se houver pedido parcial anterior e uma resposta de clarificacao, mescle a resposta no pedido anterior e preserve os itens ja confirmados.',
+            'Se houver pedido anterior e o cliente enviar uma correcao parcial (ex: "sao 3 quilos de cebola"), atualize APENAS o item corrigido e mantenha todos os outros itens exatamente como estavam no pedido anterior, com as mesmas quantidades, unidades e confidence.',
+            'Ao mesclar correcao parcial, preserve os itens nao mencionados sem alteracao.'
           ].join(' ')
         },
         {

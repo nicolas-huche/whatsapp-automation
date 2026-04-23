@@ -59,25 +59,43 @@ export function detectMessageType(payload) {
 export function extractCustomerPhone(payload) {
   const data = dataFrom(payload);
   const candidates = [
+    data.key?.remoteJid,
+    payload?.key?.remoteJid,
+    data.remoteJid,
+    payload?.remoteJid,
+    data.key?.participant,
+    payload?.key?.participant,
     payload?.sender,
     data.sender,
-    data.key?.remoteJid,
-    data.key?.participant,
-    data.remoteJid,
     data.from,
     payload?.from
   ].filter(Boolean);
 
   for (const candidate of candidates) {
-    const beforeAt = String(candidate).split('@')[0];
+    const raw = String(candidate).trim();
+    const [beforeAt, suffix = ''] = raw.split('@');
+    const normalizedSuffix = suffix.toLowerCase();
+
+    if (normalizedSuffix === 'lid' && beforeAt.trim()) {
+      return beforeAt.trim();
+    }
+
     const digits = beforeAt.replace(/\D/g, '');
 
-    if (digits.length >= 10 && digits.length <= 15) {
+    if (digits.length >= 10 && digits.length <= 20) {
       return digits;
     }
   }
 
   return null;
+}
+
+export function extractCustomerName(payload) {
+  const data = dataFrom(payload);
+  const name = [data.pushName, payload?.pushName]
+    .find((value) => typeof value === 'string' && value.trim());
+
+  return name?.trim() || null;
 }
 
 function extractText(payload) {

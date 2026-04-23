@@ -16,8 +16,21 @@ function headers() {
   return output;
 }
 
-function normalizePhone(phone) {
-  return String(phone ?? '').replace(/\D/g, '');
+function normalizeRecipient(to) {
+  const raw = String(to ?? '').trim();
+  const lower = raw.toLowerCase();
+  const beforeAt = raw.split('@')[0];
+  const digits = beforeAt.replace(/\D/g, '');
+
+  if (lower.includes('@lid')) {
+    return raw;
+  }
+
+  if (digits.length > 15) {
+    return digits;
+  }
+
+  return digits;
 }
 
 async function parseResponse(response) {
@@ -34,7 +47,7 @@ async function parseResponse(response) {
 
 export async function sendTextMessage({ to, text, instance = process.env.EVOLUTION_INSTANCE }) {
   const url = baseUrl();
-  const number = normalizePhone(to);
+  const number = normalizeRecipient(to);
 
   if (!url) {
     throw new AppError('EVOLUTION_API_URL nao configurada para enviar mensagem.', 500);
@@ -60,7 +73,9 @@ export async function sendTextMessage({ to, text, instance = process.env.EVOLUTI
       headers: headers(),
       body: JSON.stringify({
         number,
-        text: text.trim()
+        textMessage: {
+          text: text.trim()
+        }
       })
     });
   } catch (error) {
