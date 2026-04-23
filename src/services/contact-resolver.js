@@ -29,6 +29,12 @@ function lidFrom(identifier) {
 function isLidIdentifier(identifier) {
   const raw = String(identifier ?? '').trim().toLowerCase();
   const digits = lidFrom(raw);
+  console.log('[contact-resolver] isLid check:', {
+    raw: identifier,
+    digits,
+    length: digits.length
+  });
+
   return raw.includes('@lid') || digits.length > 15;
 }
 
