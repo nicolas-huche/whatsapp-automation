@@ -45,6 +45,11 @@ function extractInstance(payload) {
   return payload?.instance || data.instance || process.env.EVOLUTION_INSTANCE;
 }
 
+function isFromMe(payload) {
+  const data = dataFrom(payload);
+  return Boolean(data.key?.fromMe || payload?.key?.fromMe);
+}
+
 function formatQuantity(value) {
   if (value === null || value === undefined) return '';
   return Number.isInteger(value) ? String(value) : String(value).replace('.', ',');
@@ -55,7 +60,8 @@ function formatOrderItems(order) {
     .map((item) => {
       const quantity = formatQuantity(item.quantity);
       const unit = item.unit || '';
-      return `- ${[quantity, unit, item.product].filter(Boolean).join(' ')}`;
+      const productName = item.product_name || item.product;
+      return `- ${[quantity, unit, productName].filter(Boolean).join(' ')}`;
     })
     .join('\n');
 }
@@ -69,11 +75,10 @@ function buildConfirmationMessage(order) {
 
 async function handleWebhookMessages(request, reply) {
   const payload = request.body;
-  const data = payload?.data ?? payload ?? {};
 
-//  if (data.key?.fromMe) {
-//    return reply.send({ ignored: true, reason: 'fromMe' });
-//  }
+  if (isFromMe(payload)) {
+    return reply.send({ ignored: true, reason: 'fromMe' });
+  }
 
   const customerPhone = extractCustomerPhone(payload);
 

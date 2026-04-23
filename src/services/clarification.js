@@ -1,9 +1,9 @@
 import { sendTextMessage } from './whatsapp-sender.js';
 
 export function confidenceThreshold() {
-  const threshold = Number(process.env.ORDER_CONFIDENCE_THRESHOLD || 0.75);
+  const threshold = Number(process.env.ORDER_CONFIDENCE_THRESHOLD || 0.8);
 
-  if (!Number.isFinite(threshold)) return 0.75;
+  if (!Number.isFinite(threshold)) return 0.8;
   if (threshold < 0) return 0;
   if (threshold > 1) return 1;
 
@@ -30,20 +30,21 @@ export function orderNeedsClarification(order, threshold = confidenceThreshold()
 
 function describeItem(item) {
   const quantity = item.quantity ? String(item.quantity).replace('.', ',') : null;
+  const productName = item.product_name || item.product;
 
   if (!quantity && !item.unit) {
-    return `${item.product} (quantidade e unidade)`;
+    return `${productName} (quantidade e unidade)`;
   }
 
   if (!quantity) {
-    return `${item.unit} ${item.product} (quantidade)`;
+    return `${item.unit} ${productName} (quantidade)`;
   }
 
   if (!item.unit) {
-    return `${quantity} ${item.product} (unidade)`;
+    return `${quantity} ${productName} (unidade)`;
   }
 
-  const parts = [quantity, item.unit, item.product];
+  const parts = [quantity, item.unit, productName];
 
   return parts.join(' ');
 }

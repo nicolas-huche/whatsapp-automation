@@ -95,16 +95,34 @@ function normalizeUnit(value) {
   return aliases[normalizedKey(value)] || String(value).trim().toLowerCase();
 }
 
+function parseBoolean(value, fallback = false) {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value !== 'string') return fallback;
+
+  const normalized = normalizedKey(value);
+  if (['true', 'sim', 'yes', '1'].includes(normalized)) return true;
+  if (['false', 'nao', 'no', '0'].includes(normalized)) return false;
+
+  return fallback;
+}
+
 function normalizeItem(item) {
-  const product = firstDefined(item.product, item.produto, item.name, item.nome);
+  const product = firstDefined(item.product_name, item.product, item.produto, item.name, item.nome);
   const unit = firstDefined(item.unit, item.unidade);
   const quantity = parseQuantity(firstDefined(item.quantity, item.quantidade, item.qty));
   const ambiguities = asArray(firstDefined(item.ambiguities, item.ambiguidades));
+  const productName = String(product ?? '').trim().toLowerCase();
+  const unitWasInferred = firstDefined(item.unit_was_inferred, item.unidade_inferida, false);
+  const inferenceReason = firstDefined(item.inference_reason, item.motivo_inferencia, item.reason);
 
   return {
-    product: String(product ?? '').trim().toLowerCase(),
+    product_name: productName,
+    product: productName,
     quantity,
     unit: normalizeUnit(unit),
+    unit_was_inferred: parseBoolean(unitWasInferred),
+    inference_reason: inferenceReason ? String(inferenceReason).trim() : null,
     confidence: clampConfidence(firstDefined(item.confidence, item.confianca), ambiguities.length ? 0.55 : 0.75),
     ambiguities
   };
@@ -113,7 +131,7 @@ function normalizeItem(item) {
 function normalizeOrder(raw) {
   const rawItems = firstDefined(raw.items, raw.itens, raw.products, raw.produtos);
   const items = Array.isArray(rawItems)
-    ? rawItems.map(normalizeItem).filter((item) => item.product)
+    ? rawItems.map(normalizeItem).filter((item) => item.product_name)
     : [];
   const itemConfidences = items.map((item) => item.confidence);
   const fallbackConfidence = itemConfidences.length
@@ -168,7 +186,7 @@ export async function reasonAboutOrder(text, context = null) {
     throw new AppError('Texto vazio para estruturar pedido.', 422);
   }
 
-  const model = process.env.OPENAI_ORDER_MODEL || 'gpt-4o-mini';
+  const model = process.env.OPENAI_ORDER_MODEL || 'gpt-4o';
 
   try {
     const completion = await getOpenAIClient().chat.completions.create({
@@ -181,11 +199,12 @@ export async function reasonAboutOrder(text, context = null) {
           role: 'system',
           content: [
             'Voce estrutura pedidos de compra recebidos por WhatsApp em JSON valido, sem markdown.',
-            'Schema obrigatorio: {"items":[{"product":"nome","quantity":numero|null,"unit":"kg|g|un|cx|pct|fardo|maco|dz|l|ml|null","confidence":0-1,"ambiguities":["..."]}],"confidence":0-1,"ambiguities":["..."],"needs_clarification":boolean,"clarification_questions":["..."]}.',
+            'Schema obrigatorio: {"items":[{"product_name":"nome","quantity":numero|null,"unit":"kg|g|un|cx|pct|fardo|maco|dz|l|ml|null","unit_was_inferred":boolean,"inference_reason":"texto|null","confidence":0-1,"ambiguities":["..."]}],"confidence":0-1,"ambiguities":["..."],"needs_clarification":boolean,"clarification_questions":["..."]}.',
             'Use nomes de produtos em portugues, minusculos e sem inventar itens.',
             'Converta quantidades para numero com ponto decimal. Preserve a unidade informada quando existir.',
             'Inferencias permitidas: quilo/kilo/kg => kg; grama/g => g; unidade/unid/peca => un; caixa/cx => cx; pacote/pct => pct; duzia/dz => dz; litro/l => l; mililitro/ml => ml.',
-            'Se o cliente disser "2 limao", "3 cebola" ou item contavel sem unidade explicita, use unit "un", mas reduza confidence se o produto tambem costuma ser vendido por peso ou caixa.',
+            'Sempre preencha unit_was_inferred e inference_reason: use true quando a unidade nao foi dita literalmente e voce precisou inferir; use false e inference_reason null quando a unidade foi dita.',
+            'Se o cliente disser "2 limao", "3 cebola" ou item contavel sem unidade explicita, use unit "un", unit_was_inferred true, explique em inference_reason e reduza confidence se o produto tambem costuma ser vendido por peso ou caixa.',
             'Se quantidade ou unidade estiver ausente, ambigua, contraditoria ou depender de confirmacao comercial, use confidence baixo, descreva em ambiguities e gere uma pergunta curta em clarification_questions.',
             'Se houver pedido parcial anterior e uma resposta de clarificacao, mescle a resposta no pedido anterior e preserve os itens ja confirmados.'
           ].join(' ')

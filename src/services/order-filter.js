@@ -18,7 +18,7 @@ function getOpenAIClient() {
 export async function isPurchaseOrder(text) {
   if (!text?.trim()) return false;
 
-  const model = process.env.OPENAI_ORDER_FILTER_MODEL || 'gpt-4o-mini';
+  const model = process.env.OPENAI_FILTER_MODEL || process.env.OPENAI_ORDER_FILTER_MODEL || 'gpt-4o-mini';
 
   try {
     const completion = await getOpenAIClient().chat.completions.create({
