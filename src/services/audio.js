@@ -39,6 +39,14 @@ export async function transcribeAudio(media) {
   const tempPath = path.join(os.tmpdir(), `whatsapp-audio-${randomUUID()}${extensionFromMime(media.mimeType)}`);
 
   try {
+
+    console.log('[audio] media info', {
+      mimeType: media.mimeType,
+      bufferSize: media.buffer.length,
+      filename: media.filename,
+      tempPath
+    });
+
     await writeFile(tempPath, media.buffer);
 
     const transcription = await getOpenAIClient().audio.transcriptions.create({

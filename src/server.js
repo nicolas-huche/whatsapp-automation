@@ -33,6 +33,23 @@ app.get('/health', async () => ({
 
 async function handleWebhookMessages(request, reply) {
   const payload = request.body;
+  const data = payload?.data ?? payload ?? {};
+
+//  if (data.key?.fromMe) {
+//    return reply.send({ ignored: true, reason: 'fromMe' });
+//  }
+
+  const customerPhone = extractCustomerPhone(payload);
+
+  // Filtra só números permitidos (se configurado)
+  const allowed = process.env.ALLOWED_PHONES;
+  if (allowed) {
+    const allowedList = allowed.split(',').map(n => n.trim());
+    if (!allowedList.includes(customerPhone)) {
+      return reply.send({ ignored: true, reason: 'not_allowed', phone: customerPhone });
+    }
+  }
+
   const receivedAt = new Date().toISOString();
 
   console.log('[webhook] mensagem recebida', {
@@ -40,7 +57,7 @@ async function handleWebhookMessages(request, reply) {
     event: payload?.event,
     instance: payload?.instance,
     messageId: payload?.data?.key?.id,
-    customerPhone: extractCustomerPhone(payload)
+    customerPhone
   });
 
   const mediaResult = await routeMediaToText(payload);

@@ -363,7 +363,11 @@ async function downloadMedia(payload, type) {
   const mediaUrl = findPayloadMediaUrl(payload, type);
 
   if (mediaUrl) {
-    return fetchMediaUrl(mediaUrl, payload, type);
+    try {
+      return await fetchMediaUrl(mediaUrl, payload, type);
+    } catch (error) {
+      console.log('[media] URL direta falhou, tentando via Evolution API...', error.message);
+    }
   }
 
   return fetchEvolutionBase64(payload, type);
