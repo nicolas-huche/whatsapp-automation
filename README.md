@@ -1,5 +1,6 @@
-Backend Fastify para receber webhooks da Evolution API e transformar mensagens de WhatsApp em texto interpretado.
-Na Fase 2, tambem identifica pedidos de compra, estrutura itens com OpenAI e envia clarificacoes ou confirmacoes pelo WhatsApp.
+Backend Fastify que recebe webhooks da Evolution API, interpreta mensagens de WhatsApp (texto/audio/imagem),
+estrutura pedidos com OpenAI, grava na planilha do Google Sheets, cria cobranca Pix e emite NF-e
+quando o pagamento e confirmado.
 
 ## Setup
 
@@ -10,20 +11,22 @@ Na Fase 2, tambem identifica pedidos de compra, estrutura itens com OpenAI e env
 npm install
 ```
 
-3. Preencha `.env`:
+3. Preencha `.env` (veja `.env.example`). Em producao, preencha apenas o provider que voce usa
+   (Asaas OU Mercado Pago, Focus NFe OU eNotas).
 
-```bash
-OPENAI_API_KEY=sk-...
-EVOLUTION_API_URL=https://sua-evolution-api
-EVOLUTION_API_KEY=sua-chave
-EVOLUTION_INSTANCE=sua-instancia
-OPENAI_FILTER_MODEL=gpt-4o-mini
-OPENAI_ORDER_MODEL=gpt-4o
-ORDER_CONFIDENCE_THRESHOLD=0.8
-ORDER_STATE_TTL_MINUTES=30
+4. Crie a planilha do Google e compartilhe com o email do service account.
+   Cabecalho na primeira linha da aba `Pedidos`:
+
+```
+timestamp | order_id | customer_phone | customer_name | product | quantity | unit | unit_price | total | status
 ```
 
-4. Inicie:
+   Instale o Google Apps Script em `apps-script/Code.gs` (ver instrucoes no topo do
+   arquivo). Ele detecta `status = PRONTO` e chama `POST /order/finalize`
+   automaticamente. A funcao `setupSheet` cria cabecalho e validacao de dados da
+   coluna status de uma vez.
+
+5. Inicie:
 
 ```bash
 npm run dev
@@ -33,34 +36,66 @@ npm run dev
 
 ### GET /health
 
-Health check simples.
+Health check.
 
 ### POST /webhook/messages
 
-Recebe payload de `MESSAGES_UPSERT` da Evolution API. O backend:
+Recebe `MESSAGES_UPSERT` da Evolution API. O backend:
 
 - detecta `text`, `audio` ou `image`;
-- extrai texto direto, transcreve audio com `whisper-1`, ou interpreta imagem com `gpt-4o`;
-- ignora mensagens `fromMe` para evitar loop com as mensagens enviadas pelo proprio bot;
-- usa `gpt-4o-mini` como pre-filtro barato para decidir se e pedido;
-- usa `gpt-4o` para estruturar pedidos em JSON;
-- envia clarificacao quando a confianca fica abaixo do threshold;
-- envia confirmacao quando o pedido esta suficientemente claro.
+- transcreve audio com Whisper e interpreta imagem com GPT-4o Vision;
+- ignora `fromMe` para evitar loops;
+- filtra por `ALLOWED_PHONES` se configurado;
+- usa GPT-4o-mini como pre-filtro (pedido ou nao);
+- usa GPT-4o para estruturar o pedido em JSON;
+- envia pergunta de clarificacao se algum item tiver confidence baixo;
+- pede confirmacao quando o pedido esta completo;
+- ao confirmar, adiciona uma linha por item na planilha do Google Sheets.
 
-Resposta:
+### POST /order/finalize
+
+Chamado pelo Google Apps Script quando voce marca a linha como PRONTO na planilha. Payload:
 
 ```json
 {
-  "type": "text",
+  "order_id": "P-20260101-ABCD",
   "customer_phone": "5521999999999",
-  "text": "quero 5 kg de tomate, 3 cebola e 2 limao",
-  "received_at": "2025-01-15T14:32:00Z",
-  "order_status": "needs_clarification"
+  "customer_name": "Joao",
+  "customer_document": "12345678909",
+  "customer_email": "opcional@exemplo.com",
+  "items": [
+    { "product_name": "tomate", "quantity": 5, "unit": "kg", "unit_price": 8.50 }
+  ],
+  "total": 42.50
 }
 ```
 
+Cria cobranca Pix no provider configurado (Asaas ou Mercado Pago), envia o link de pagamento
+pelo WhatsApp e guarda o pedido aguardando pagamento.
+
+### POST /webhook/payment
+
+Webhook do gateway de pagamento. Para Asaas, o payload ja traz `event` e `payment`. Para
+Mercado Pago, o backend consulta `/v1/payments/{id}` para confirmar status e recuperar
+`external_reference`. Quando o pagamento e aprovado:
+
+- emite NF-e (Focus NFe ou eNotas);
+- envia mensagem de confirmacao com a URL da NF-e para o cliente;
+- limpa o pedido do store de pagamentos pendentes.
+
+## Fases implementadas
+
+- Fase 1 — Interpretacao de midia (texto/audio/imagem) → `src/services/media-router.js`, `audio.js`, `image.js`.
+- Fase 2 — Pre-filtro, raciocinio e loop de clarificacao → `order-filter.js`, `order-reasoning.js`, `order-state.js`, `clarification.js`.
+- Fase 3 — Confirmacao + Google Sheets → `sheets.js` e handler de confirmacao em `server.js`.
+- Fase 4 — Cobranca Pix (Asaas ou Mercado Pago) → `billing.js` e `POST /order/finalize`.
+- Fase 5 — Emissao de NF-e (Focus NFe ou eNotas) → `invoice.js` e `POST /webhook/payment`.
+
 ## Observacoes
 
-- O estado de pedidos em andamento fica em um `Map` em memoria. Se o processo reiniciar, as clarificacoes pendentes sao perdidas.
-- Nao ha banco de dados, confirmacao, cobranca, NF-e ou frontend.
-- A Evolution API pode enviar midia como base64, URL ou exigir download por `/chat/getBase64FromMediaMessage/{instance}`; o roteador tenta os tres caminhos.
+- O estado de pedidos em andamento fica em `Map` em memoria (`order-state.js`, `order-store.js`).
+  Se o processo reiniciar, pedidos aguardando clarificacao ou pagamento sao perdidos.
+- A autenticacao do Google Sheets usa JWT RS256 assinado nativamente com `crypto`, sem
+  dependencia do SDK `googleapis`.
+- A Evolution API pode enviar midia como base64, URL ou exigir download por
+  `/chat/getBase64FromMediaMessage/{instance}`; o roteador tenta os tres caminhos.
